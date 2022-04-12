@@ -74,6 +74,7 @@ parser.add_argument("--num-heads", type=int, default=8)
 args, unknown = parser.parse_known_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 arg_strings = [
     uuid.uuid1().hex[:4],
@@ -93,7 +94,7 @@ writer = SummaryWriter(log_dir=args.log_dir)
 set_logger(f"{args.log_dir}/logs.log")
 logger.info(f"unknown={unknown}\n Args: {args}")
 
-model = NeuralComplexity1D(args).cuda()
+model = NeuralComplexity1D(args).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 mse_criterion = nn.MSELoss(reduction="none")
 mae_criterion = nn.L1Loss()
@@ -107,7 +108,7 @@ test_tasks = get_task(
     batch_size=args.task_batch_size,
     num_steps=args.test_steps,
 )
-logger.info(f"Dataset loading took {timer() - global_timestamp:.2f} seconds")
+# logger.info(f"Dataset loading took {timer() - global_timestamp:.2f} seconds")
 
 
 class MemoryBank:
@@ -143,25 +144,74 @@ class MemoryBank:
 
         idxs = random.sample(range(N), k=batch_size)
         batch = {
-            "te_xp": self.te_xp[idxs].cuda(),
-            "tr_xp": self.tr_xp[idxs].cuda(),
-            "tr_xyp": self.tr_xyp[idxs].cuda(),
+            "te_xp": self.te_xp[idxs].to(device),
+            "tr_xp": self.tr_xp[idxs].to(device),
+            "tr_xyp": self.tr_xyp[idxs].to(device),
         }
-        return (batch, self.gap[idxs].cuda())
+        return (batch, self.gap[idxs].to(device))
 
 
 def run_regression(batch, train=True):
-    x_train, y_train = batch["train"][0].cuda(), batch["train"][1].cuda()
-    x_test, y_test = batch["test"][0].cuda(), batch["test"][1].cuda()
+    x_train, y_train = batch["train"][0].to(device), batch["train"][1].to(device)
+    x_test, y_test = batch["test"][0].to(device), batch["test"][1].to(device)
 
     h = get_learner(
         batch_size=x_train.shape[0],
         layers=args.learner_layers,
         hidden_size=args.learner_hidden,
         activation=args.learner_act,
-    ).cuda()
+        task='regression'
+    ).to(device)
     h_opt = torch.optim.SGD(h.parameters(), lr=args.inner_lr)
     h_crit = nn.MSELoss(reduction="none")
+
+    for _ in range(args.inner_steps):
+        preds_train = h(x_train)
+        preds_test = h(x_test)
+
+        te_xp = torch.cat([x_test, preds_test], dim=-1)
+        tr_xp = torch.cat([x_train, preds_train], dim=-1)
+        tr_xyp = torch.cat([x_train, y_train, preds_train], dim=-1)
+        meta_batch = {"te_xp": te_xp, "tr_xp": tr_xp, "tr_xyp": tr_xyp}
+
+        h_loss = h_crit(preds_train.squeeze(), y_train.squeeze()).mean(-1).sum()
+        if args.nc_regularize and global_step > args.train_steps * 2:
+            model_preds = model(meta_batch)
+            # We sum NC outputs across tasks because h_loss is also summed.
+            nc_regularization = model_preds.sum()
+            h_loss += nc_regularization * args.nc_weight
+
+        h_opt.zero_grad()
+        h_loss.backward()
+        h_opt.step()
+
+        l_test = mse_criterion(preds_test.squeeze(), y_test.squeeze())
+        l_train = mse_criterion(preds_train.squeeze(), y_train.squeeze())
+        gap = l_test.mean(-1) - l_train.mean(-1)
+
+        if train:
+            memory_bank.add(
+                te_xp=te_xp.cpu().detach(),
+                tr_xp=tr_xp.cpu().detach(),
+                tr_xyp=tr_xyp.cpu().detach(),
+                gap=gap.cpu().detach(),
+            )
+    return h, meta_batch
+
+
+def run_classification(batch, train=True):
+    x_train, y_train = batch["train"][0].to(device), batch["train"][1].to(device)
+    x_test, y_test = batch["test"][0].to(device), batch["test"][1].to(device)
+
+    h = get_learner(
+        batch_size=x_train.shape[0],
+        layers=args.learner_layers,
+        hidden_size=args.learner_hidden,
+        activation=args.learner_act,
+        task='classification',
+    ).to(device)
+    h_opt = torch.optim.SGD(h.parameters(), lr=args.inner_lr)
+    h_crit = nn.CrossEntropyLoss()
 
     for _ in range(args.inner_steps):
         preds_train = h(x_train)
@@ -202,8 +252,8 @@ def test(epoch):
     for batch in test_tasks:
         h, meta_batch = run_regression(batch, train=False)
 
-        x_train, y_train = batch["train"][0].cuda(), batch["train"][1].cuda()
-        x_test, y_test = batch["test"][0].cuda(), batch["test"][1].cuda()
+        x_train, y_train = batch["train"][0].to(device), batch["train"][1].to(device)
+        x_test, y_test = batch["test"][0].to(device), batch["test"][1].to(device)
         with torch.no_grad():
             preds_train = h(x_train)
             preds_test = h(x_test)

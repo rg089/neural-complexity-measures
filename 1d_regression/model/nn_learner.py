@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
-def get_learner(batch_size, layers, hidden_size, activation, regularizer=None):
+def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, task='regression'):
     if activation == "relu":
         activation = nn.ReLU
     elif activation == "sigmoid":
@@ -18,14 +18,25 @@ def get_learner(batch_size, layers, hidden_size, activation, regularizer=None):
         activation = nn.Identity
     else:
         raise ValueError(f"activation={activation} not implemented!")
-
-    return ParallelNeuralNetwork(
-        batch_size,
-        num_layers=layers,
-        hidden_size=hidden_size,
-        activation=activation,
-        regularizer=regularizer,
-    )
+        
+    if task == 'regression':
+        return ParallelNeuralNetwork(
+            batch_size,
+            num_layers=layers,
+            hidden_size=hidden_size,
+            activation=activation,
+            regularizer=regularizer,
+        )
+    elif task == 'classification':
+        raise NotImplementedError
+        return ParallelNeuralNetwork(
+            batch_size,
+            num_layers=layers,
+            hidden_size=hidden_size,
+            activation=activation,
+            regularizer=regularizer,
+            output_activation=nn.Softmax(dim=1),
+        )
 
 
 class ParallelLinear(nn.Module):
