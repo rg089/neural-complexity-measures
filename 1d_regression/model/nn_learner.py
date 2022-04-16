@@ -50,6 +50,30 @@ class ParallelLinear(nn.Module):
         return torch.einsum("bnd,bmd->bnm", x, self.weight) + self.bias
 
 
+class RegressionNeuralNetwork(nn.Module):
+    def __init__(self, batch_size, num_layers, init_dim, hidden_size, activation, num_outputs, regularizer=None):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        self.layers.append(nn.Linear(init_dim, hidden_size))
+        for _ in range(num_layers - 1):
+            self.layers.append(activation())
+            self.layers.append(
+                nn.Linear(hidden_size, hidden_size)
+            )
+            if regularizer == "dropout":
+                self.layers.append(nn.Dropout())
+
+        self.layers.append(activation())
+        self.layers.append(nn.Linear(hidden_size, num_outputs))
+        self.activation = activation
+        self.regularizer = regularizer
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+
 class ParallelNeuralNetwork(nn.Module):
     """ Equivalent to running args.batch_size neural networks in parallel. No weight sharing. """
 

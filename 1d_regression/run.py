@@ -297,6 +297,7 @@ def test(epoch):
 
 
 def train():
+    # This is the inner loop (basically this is the train_epoch function)
     global global_step
     train_loader = get_task(
         saved=False,
@@ -306,7 +307,7 @@ def train():
     )
     for batch in train_loader:
         global_step += 1
-        if global_step % args.learn_freq == 0:
+        if global_step % args.learn_freq == 0: # run the predictor after every 10 batches
             run_regression(batch)
 
         meta_batch, gap = memory_bank.get_batch(args.batch_size)
