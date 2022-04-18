@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
-def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, task='regression'):
+def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, task='regression', init_dim=23, num_outputs=10):
     if activation == "relu":
         activation = nn.ReLU
     elif activation == "sigmoid":
@@ -20,12 +20,14 @@ def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, t
         raise ValueError(f"activation={activation} not implemented!")
         
     if task == 'regression':
-        return ParallelNeuralNetwork(
+        return RegressionNeuralNetwork(
             batch_size,
             num_layers=layers,
             hidden_size=hidden_size,
             activation=activation,
             regularizer=regularizer,
+            init_dim=init_dim,
+            num_outputs=num_outputs,
         )
     elif task == 'classification':
         raise NotImplementedError
@@ -69,8 +71,11 @@ class RegressionNeuralNetwork(nn.Module):
         self.regularizer = regularizer
 
     def forward(self, x):
-        for layer in self.layers:
+        # print(x.shape)
+        for i, layer in enumerate(self.layers):
+            # print(f"In layer {i+1}, Shape={x.shape}", end=" ")
             x = layer(x)
+            # print(f"Ouput Shape = {x.shape}")
         return x
 
 

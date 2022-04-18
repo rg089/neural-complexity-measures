@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset
 from loguru import logger
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
@@ -17,7 +18,56 @@ from data.get_loader import get_task
 from model.neural_complexity import NeuralComplexity1D
 from model.nn_learner import get_learner
 from utils import Accumulator, set_logger
+import dataloader
 
+
+class TsDS(Dataset):
+    def __init__(self, XL,yL,flatten=False,lno=None,long=True):
+        self.samples=[]
+        self.labels=[]
+        self.flatten=flatten
+        self.lno=lno
+        self.long=long
+        self.scaler = StandardScaler()
+        for X,Y in zip(XL,yL):
+            self.samples += [torch.tensor(X).float()]
+            self.labels += [torch.tensor(Y)]
+            
+    def __len__(self):
+        return sum([s.shape[0] for s in self.samples])
+
+    def __getitem__(self, idx):
+        if self.flatten: sample=self.samples[idx].flatten(start_dim=1)
+        else: sample=self.samples[idx]
+        if self.lno==None: label=self.labels[idx]
+        elif self.long: label=self.labels[idx][:,self.lno].long()
+        else: label=self.labels[idx][:,self.lno].float()
+        return (sample,label)
+
+    def fit(self,kind='seq'):
+        if kind=='seq':
+            self.lastelems=[torch.cat([s[:,-1,:] for s in self.samples],dim=0)]
+            self.scaler.fit(torch.cat([le for le in self.lastelems],dim=0))            
+        elif kind=='flat': self.scaler.fit(torch.cat([s for s in self.samples],dim=0))
+    def scale(self,kind='flat',scaler=None):
+        def cs(s):
+            return (s.shape[0]*s.shape[1],s.shape[2])
+        if scaler==None: scaler=self.scaler
+        if kind=='seq':
+            self.samples=[torch.tensor(scaler.transform(s.reshape(cs(s))).reshape(s.shape)).float() for s in self.samples]
+            pass
+        elif kind=='flat':
+            self.samples=[torch.tensor(scaler.transform(s)).float() for s in self.samples]
+    def unscale(self,kind='flat',scaler=None):
+        def cs(s):
+            return (s.shape[0]*s.shape[1],s.shape[2])
+        if scaler==None: scaler=self.scaler
+        if kind=='seq':
+            self.samples=[torch.tensor(scaler.inverse_transform(s.reshape(cs(s))).reshape(s.shape)).float() for s in self.samples]
+            pass
+        elif kind=='flat':
+            self.samples=[torch.tensor(scaler.inverse_transform(s)).float() for s in self.samples]
+    
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -31,15 +81,15 @@ def str2bool(v):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--gpu", type=str, default="7")
-parser.add_argument("--batch-size", type=int, default=512)
-parser.add_argument("--task-batch-size", type=int, default=64)
-parser.add_argument("--lr", type=float, default=5e-4)
+parser.add_argument("--gpu", type=str, default="0")
+parser.add_argument("--batch-size", type=int, default=32)
+parser.add_argument("--task-batch-size", type=int, default=32)
+parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--time-budget", type=int, default=1e10)
 parser.add_argument("--task", type=str, default="sine")
 parser.add_argument("--nc-regularize", type=str2bool, default=True)
 
-parser.add_argument("--epochs", type=int, default=1000)
+parser.add_argument("--epochs", type=int, default=50)
 parser.add_argument("--train-steps", type=int, default=500)
 parser.add_argument("--log-steps", type=int, default=500)
 parser.add_argument("--test-steps", type=int, default=250)
@@ -69,7 +119,7 @@ parser.add_argument("--dec", type=str, default="fc", choices=["fc"])
 
 parser.add_argument("--enc-depth", type=int, default=3)
 parser.add_argument("--dec-depth", type=int, default=2)
-parser.add_argument("--hid-dim", type=int, default=512)
+parser.add_argument("--hid-dim", type=int, default=1024)
 parser.add_argument("--num-heads", type=int, default=8)
 args, unknown = parser.parse_known_args()
 
@@ -83,8 +133,8 @@ arg_strings = [
     f"_lyr{args.learner_layers}h{args.learner_hidden}{args.learner_act}",
     f"_{args.enc_depth}{args.pool}{args.dec_depth}d{args.hid_dim}",
 ]
-if args.nc_weight != 1.0:
-    arg_strings.append("w{args.nc_weight}")
+# if args.nc_weight != 1.0:
+#     arg_strings.append("w{args.nc_weight}")
 if args.pool == "pma":
     arg_strings.append(f"heads{args.num_heads}")
 args.log_dir = "result/summary/temp/" + "_".join(arg_strings)
@@ -102,12 +152,12 @@ accum = Accumulator()
 global_timestamp = timer()
 global_step = 0
 
-test_tasks = get_task(
-    saved=True,
-    task=args.task,
-    batch_size=args.task_batch_size,
-    num_steps=args.test_steps,
-)
+# test_tasks = get_task(
+#     saved=True,
+#     task=args.task,
+#     batch_size=args.task_batch_size,
+#     num_steps=args.test_steps,
+# )
 # logger.info(f"Dataset loading took {timer() - global_timestamp:.2f} seconds")
 
 
@@ -154,12 +204,15 @@ class MemoryBank:
 def run_regression(batch, train=True):
     x_train, y_train = batch["train"][0].to(device), batch["train"][1].to(device)
     x_test, y_test = batch["test"][0].to(device), batch["test"][1].to(device)
+    # print("shape: ", x_train.shape, x_test.shape)
 
     h = get_learner(
         batch_size=x_train.shape[0],
         layers=args.learner_layers,
         hidden_size=args.learner_hidden,
         activation=args.learner_act,
+        init_dim=23,
+        num_outputs=10,
         task='regression'
     ).to(device)
     h_opt = torch.optim.SGD(h.parameters(), lr=args.inner_lr)
@@ -247,7 +300,7 @@ def run_classification(batch, train=True):
     return h, meta_batch
 
 
-def test(epoch):
+def test(epoch, test_tasks):
     test_accum = Accumulator()
     for batch in test_tasks:
         h, meta_batch = run_regression(batch, train=False)
@@ -296,18 +349,17 @@ def test(epoch):
     )
 
 
-def train():
-    # This is the inner loop (basically this is the train_epoch function)
+def train(train_loader):
     global global_step
-    train_loader = get_task(
-        saved=False,
-        task=args.task,
-        batch_size=args.task_batch_size,
-        num_steps=args.train_steps,
-    )
+    # train_loader = get_task(
+    #     saved=False,
+    #     task=args.task,
+    #     batch_size=args.task_batch_size,
+    #     num_steps=args.train_steps,
+    # )
     for batch in train_loader:
         global_step += 1
-        if global_step % args.learn_freq == 0: # run the predictor after every 10 batches
+        if global_step % args.learn_freq == 0:
             run_regression(batch)
 
         meta_batch, gap = memory_bank.get_batch(args.batch_size)
@@ -351,11 +403,24 @@ def train():
 
 memory_bank = MemoryBank()
 populate_timestamp = timer()
-populate_loader = get_task(
-    saved=False, task=args.task, batch_size=args.task_batch_size, num_steps=100
-)
-for batch in populate_loader:
+# populate_loader = get_task(
+#     saved=False, task=args.task, batch_size=args.task_batch_size, num_steps=100
+# )
+task_count = 2
+populate_loader = []
+for tasks in range(task_count):
+    X_train, y_train, X_test, y_test = dataloader.sample_task()
+    
+    for batch in zip(X_train, y_train, X_test, y_test):
+        X_tr, y_tr = batch[0].float(), batch[1].float()
+        X_te, y_te = batch[2].float(), batch[3].float()
+        if X_tr.shape[0] == X_te.shape[0]:
+            d = {"train": [X_tr, y_tr],
+                    "test": [X_te, y_te]}
+            populate_loader.append(d)
+for i, batch in enumerate(populate_loader):
     run_regression(batch)
+    print(i+1)
 logger.info(f"Populate time: {timer() - populate_timestamp}")
 
 for epoch in range(args.epochs):
@@ -363,11 +428,11 @@ for epoch in range(args.epochs):
     logger.info(f"Bank size: {memory_bank.te_xp.shape[0]}")
 
     test_timestamp = timer()
-    out = test(epoch)
+    out = test(epoch, populate_loader)
     test_elapsed = timer() - test_timestamp
 
     train_timestamp = timer()
-    out = train()
+    out = train(populate_loader)
     train_elapsed = timer() - train_timestamp
 
     writer.add_scalar("time/test_epoch", test_elapsed, epoch)

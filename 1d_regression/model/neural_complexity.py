@@ -26,8 +26,8 @@ class CrossAttEncoder(nn.Module):
         super().__init__()
         dim = args.hid_dim
 
-        self.mlp_v = fc_stack(args.enc_depth, 3, dim, dim)
-        self.mlp_qk = fc_stack(args.enc_depth, 2, dim, dim)
+        self.mlp_v = fc_stack(args.enc_depth, 43, dim, dim)
+        self.mlp_qk = fc_stack(args.enc_depth, 33, dim, dim)
         self.attn = MultiHeadAttention(dim, dim, dim, dim, args.num_heads)
 
     def forward(self, inputs):
@@ -43,8 +43,8 @@ class MeanPool(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        assert len(x.shape) == 3
-        return x.mean(1)
+        # assert len(x.shape) == 3
+        return x.mean(0)
 
 
 class NeuralComplexity1D(nn.Module):
@@ -61,7 +61,10 @@ class NeuralComplexity1D(nn.Module):
         self.decoder = fc_stack(args.dec_depth, args.hid_dim, args.hid_dim, 1)
 
     def forward(self, inputs):
+        # print("input shape:", inputs["te_xp"].shape)
         x = self.encoder(inputs)
-        x = self.pool(x)
+        # print("encoded shape:", x.shape)
+        # x = self.pool(x)
+        # print("pool shape:", x.shape)
         x = self.decoder(x)
         return x
