@@ -7,14 +7,14 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
-def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, task='regression', init_dim=23, num_outputs=10):
+def get_learner(batch_size, layers, hidden_size, activation=None, regularizer=None, task='regression', init_dim=23, num_outputs=10, seq_len=20):
     if activation == "relu":
         activation = nn.ReLU
     elif activation == "sigmoid":
         activation = nn.Sigmoid
     elif activation == "tanh":
         activation = nn.Tanh
-    elif activation == "none":
+    elif activation is None:
         activation = nn.Identity
     else:
         raise ValueError(f"activation={activation} not implemented!")
@@ -29,6 +29,15 @@ def get_learner(batch_size, layers, hidden_size, activation, regularizer=None, t
             init_dim=init_dim,
             num_outputs=num_outputs,
         )
+    elif task == 'timeseries':
+        return TimeSeries(
+            batch_size,
+            num_layers=layers,
+            hidden_size=hidden_size,
+            n_features=init_dim,
+            num_outputs=num_outputs,
+            seq_length=seq_len
+            )
     elif task == 'classification':
         raise NotImplementedError
         return ParallelNeuralNetwork(
@@ -236,3 +245,41 @@ class VariationalDropout(nn.Module):
             return x * epsilon
         else:
             return x
+
+
+class TimeSeries(torch.nn.Module):
+    def __init__(self, batch_size, num_layers=1, hidden_size=20,
+                n_features=18,
+                num_outputs=10,
+                seq_length=20):
+        super(TimeSeries, self).__init__()
+        self.n_features = n_features
+        self.seq_len = seq_length
+        self.n_hidden = hidden_size
+        self.n_layers = num_layers
+        self.batch_size = batch_size
+        self.init_hidden()
+    
+        self.lstm = torch.nn.LSTM(input_size = n_features, 
+                                 hidden_size = self.n_hidden,
+                                 num_layers = self.n_layers, 
+                                 batch_first = True)
+        
+        self.linear = torch.nn.Linear(self.n_hidden*self.seq_len, num_outputs)
+        self.softmax = torch.nn.Softmax()
+        
+    
+    def init_hidden(self):
+        hidden_state = torch.zeros(self.n_layers,self.batch_size,self.n_hidden)
+        cell_state = torch.zeros(self.n_layers,self.batch_size,self.n_hidden)
+        self.hidden = (hidden_state, cell_state)
+    
+    
+    def forward(self, x):        
+        batch_size, seq_len, _ = x.size()
+        lstm_out, self.hidden = self.lstm(x,self.hidden)
+        x = lstm_out.contiguous().view(batch_size,-1)
+        x = self.linear(x)
+        reg = x[:, :6]
+        cls = self.softmax(x[:, 6:])
+        return reg, cls
