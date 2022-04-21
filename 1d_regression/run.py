@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 from loguru import logger
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.preprocessing import StandardScaler
 
 from data.get_loader import get_task
 from model.neural_complexity import NeuralComplexity1D
