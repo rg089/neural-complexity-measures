@@ -467,7 +467,7 @@ def train_task_learner(batch, h, h_opt, train=True, nc=True):
 
         if  nc and nc_regularize and global_step >  train_steps * 2:
             nc_regularization = model(meta_batch).sum()
-            h_loss += torch.max(torch.tensor(nc_regularization, -0.1)) *  nc_weight
+            h_loss += torch.max(torch.tensor((nc_regularization, -0.1))) *  nc_weight
 
         h_opt.zero_grad()
         h_loss.backward()
