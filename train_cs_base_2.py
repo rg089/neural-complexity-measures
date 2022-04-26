@@ -223,6 +223,11 @@ y_train_ohe_dim = 22
 train_loss_dim = 10
 bilinear_output_dim = 256
 
+best_loss_train = 10000
+best_loss_test = 10000
+model_path_best_train = "result/best_model_train_{}.ckpt".format(experiment)
+model_path_best_test = "result/best_model_test_{}.ckpt".format(experiment)
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -517,6 +522,7 @@ def log_metrics(type_="train", metrics={}):
 def train(train_loader):
     # This is the inner loop (basically this is the train_epoch function)
     global global_step
+    global best_loss_train
 
     h = get_learner(
         layers= learner_layers,
@@ -554,6 +560,9 @@ def train(train_loader):
             ) # Adding the metrics to the accumulator for logging
 
             # LOGGING: 
+            if accum.mean("loss") < best_loss_train:
+                best_loss_train = accum.mean("loss")
+                torch.save(model, model_path_best_train)
 
             torch.save(model, model_path) # Saving the model
 
@@ -580,6 +589,7 @@ def test(epoch, test_tasks):
     """
     A function to compute the metrics for the NC model
     """
+    global best_loss_test
     
     test_accum = Accumulator()
 
@@ -622,6 +632,10 @@ def test(epoch, test_tasks):
                     "pred": [model_preds.squeeze().detach().cpu()],
                 }
             )
+
+            if accum.mean("loss") < best_loss_test:
+                best_loss_test = test_accum.mean("loss")
+                torch.save(model, model_path_best_test)
 
     all_gaps = torch.cat(test_accum["gap"])
     all_preds = torch.cat(test_accum["pred"])

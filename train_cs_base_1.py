@@ -32,7 +32,7 @@ import seaborn as sns
 
 # %%
 tracker = {"train":{}, "test":{}}
-experiment = "cs_with_nc_base_1"
+experiment = "cs_with_nc_base_1_2"
 
 # %% [markdown]
 # ## Reading the Dataset
@@ -222,6 +222,12 @@ y_train_dim = 10
 y_train_ohe_dim = 22
 train_loss_dim = 10
 bilinear_output_dim = 256
+
+best_loss_train = 10000
+best_loss_test = 10000
+model_path_best_train = "result/best_model_train_{}.ckpt".format(experiment)
+model_path_best_test = "result/best_model_test_{}.ckpt".format(experiment)
+
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -419,12 +425,12 @@ class FlatNeuralNetwork(nn.Module):
 
 # %%
 def get_task_loss(pred, target, reg_crit, cls_crit):
-    reg_loss = reg_crit(pred[:, :6].squeeze(), target[:, :6].squeeze())
+    reg_loss = 0.2 * reg_crit(pred[:, :6].squeeze(), target[:, :6].squeeze())
 
-    cls1_loss = cls_crit(pred[:, 6:10].squeeze(), target[:, 6].squeeze().long())
-    cls2_loss = cls_crit(pred[:, 10:14].squeeze(), target[:, 7].squeeze().long())
-    cls3_loss = cls_crit(pred[:, 14:18].squeeze(), target[:, 8].squeeze().long())
-    cls4_loss = cls_crit(pred[:, 18:22].squeeze(), target[:, 9].squeeze().long())
+    cls1_loss = 0.2 * cls_crit(pred[:, 6:10].squeeze(), target[:, 6].squeeze().long())
+    cls2_loss = 0.2 * cls_crit(pred[:, 10:14].squeeze(), target[:, 7].squeeze().long())
+    cls3_loss = 0.2 * cls_crit(pred[:, 14:18].squeeze(), target[:, 8].squeeze().long())
+    cls4_loss = 0.2 * cls_crit(pred[:, 18:22].squeeze(), target[:, 9].squeeze().long())
 
     concat_loss = torch.cat((reg_loss, cls1_loss.unsqueeze(1), cls2_loss.unsqueeze(1), 
                 cls3_loss.unsqueeze(1), cls4_loss.unsqueeze(1)), dim=-1)
@@ -461,7 +467,7 @@ def train_task_learner(batch, h, h_opt, train=True, nc=True):
 
         if  nc and nc_regularize and global_step >  train_steps * 2:
             nc_regularization = model(meta_batch).sum()
-            h_loss += nc_regularization *  nc_weight
+            h_loss += torch.max(nc_regularization, -0.1) *  nc_weight
 
         h_opt.zero_grad()
         h_loss.backward()
@@ -517,6 +523,7 @@ def log_metrics(type_="train", metrics={}):
 def train(train_loader):
     # This is the inner loop (basically this is the train_epoch function)
     global global_step
+    global best_loss_train
 
     h = get_learner(
         layers= learner_layers,
@@ -525,7 +532,7 @@ def train(train_loader):
         task='flat',
     ).to(device)
 
-    h_opt = torch.optim.SGD(h.parameters(), lr= inner_lr)
+    h_opt = torch.optim.Adam(h.parameters(), lr= inner_lr)
 
     for task in train_loader: # Iterating over each task
         for batch in task: # iterating over each batch in a task
@@ -554,6 +561,9 @@ def train(train_loader):
             ) # Adding the metrics to the accumulator for logging
 
             # LOGGING: 
+            if accum.mean("loss") < best_loss_train:
+                best_loss_train = accum.mean("loss")
+                torch.save(model, model_path_best_train)
 
             torch.save(model, model_path) # Saving the model
 
@@ -580,6 +590,7 @@ def test(epoch, test_tasks):
     """
     A function to compute the metrics for the NC model
     """
+    global best_loss_test
     
     test_accum = Accumulator()
 
@@ -622,6 +633,10 @@ def test(epoch, test_tasks):
                     "pred": [model_preds.squeeze().detach().cpu()],
                 }
             )
+
+            if accum.mean("loss") < best_loss_test:
+                best_loss_test = test_accum.mean("loss")
+                torch.save(model, model_path_best_test)
 
     all_gaps = torch.cat(test_accum["gap"])
     all_preds = torch.cat(test_accum["pred"])
@@ -681,7 +696,7 @@ for i, task in enumerate(task_loader):
         task='flat',
     ).to(device)
     
-    h_opt = torch.optim.SGD(h.parameters(), lr= inner_lr)
+    h_opt = torch.optim.Adam(h.parameters(), lr= inner_lr)
     
     for j, batch in enumerate(task):
         train_task_learner(batch, h, h_opt, train=True, nc=False)
@@ -840,7 +855,7 @@ h = get_learner(
     task='flat',
 ).to(device)
 
-h_opt = torch.optim.SGD(h.parameters(), lr= inner_lr)
+h_opt = torch.optim.Adam(h.parameters(), lr= inner_lr)
 
 for tasks in task_loader:
     for batch in tasks:
