@@ -992,6 +992,7 @@ logger.info(f"Train {c_mean:.4f} +- {c_conf:.4f}")
 # ### Plotting
 
 # %%
+exit()
 sns.set_style('darkgrid')
 plt.plot(range(losses_test.shape[0]), losses_test, label="test");
 plt.plot(range(losses_train.shape[0]), losses_train, label="train");
